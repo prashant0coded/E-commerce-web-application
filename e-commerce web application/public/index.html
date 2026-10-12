@@ -1,0 +1,272 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Shop</title>
+<style>
+:root{--bg:#f6f6f8;--ink:#17171c;--muted:#6b6b78;--line:#dcdce4;--card:#fff;--brand:#c2255c;--ok:#2b8a3e}
+@media (prefers-color-scheme:dark){:root{--bg:#121216;--ink:#ececf1;--muted:#9a9aa8;--line:#2a2a33;--card:#1b1b21;--brand:#f06595;--ok:#69db7c}}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);font:16px/1.5 system-ui,-apple-system,"Segoe UI",sans-serif}
+:focus-visible{outline:3px solid var(--brand);outline-offset:2px}
+button,input,select,textarea{font:inherit;color:inherit}
+input,select,textarea{width:100%;padding:9px 11px;border:1px solid var(--line);border-radius:8px;background:var(--card)}
+.btn{background:var(--brand);color:#fff;border:0;border-radius:8px;padding:9px 16px;font-weight:600;cursor:pointer}
+@media (prefers-color-scheme:dark){.btn{color:#1b0a12}}
+.btn:disabled{opacity:.5;cursor:not-allowed}
+.btn.ghost{background:transparent;color:var(--ink);border:1px solid var(--line)}
+.btn.sm{padding:4px 10px;font-size:.85rem}
+.wrap{max-width:1000px;margin:0 auto;padding:0 16px 48px}
+.hidden{display:none!important}
+header{display:flex;flex-wrap:wrap;align-items:center;gap:8px 16px;padding:16px 0}
+header .brand{font-weight:800;font-size:1.3rem;margin-right:auto}
+nav{display:flex;flex-wrap:wrap;gap:6px}
+nav button[aria-current=page]{background:var(--ink);color:var(--bg);border-color:var(--ink)}
+h2{margin:8px 0 16px}
+.bar{display:grid;grid-template-columns:2fr 1fr;gap:10px;margin-bottom:16px}
+.grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(210px,1fr));gap:16px}
+.card{background:var(--card);border:1px solid var(--line);border-radius:12px;overflow:hidden;display:flex;flex-direction:column}
+.img{aspect-ratio:4/3;background:var(--line);display:grid;place-items:center;font-size:2.5rem;font-weight:800;color:var(--muted)}
+.img img{width:100%;height:100%;object-fit:cover}
+.card .body{padding:14px;display:flex;flex-direction:column;gap:6px;flex:1}
+.card h3{margin:0;font-size:1.05rem}
+.muted{color:var(--muted);font-size:.9rem}
+.price{font-weight:800}
+.panel{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:18px;margin-bottom:14px}
+.line{display:flex;gap:12px;align-items:center;justify-content:space-between;padding:10px 0;border-bottom:1px solid var(--line);flex-wrap:wrap}
+.qty{display:flex;align-items:center;gap:8px}
+form.stack{display:grid;gap:10px}
+label{display:grid;gap:3px;font-weight:600;font-size:.9rem}
+.two{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+.msg{color:var(--brand);min-height:1.3em;font-size:.9rem}
+.badge{display:inline-block;padding:2px 10px;border-radius:99px;font-size:.8rem;font-weight:600;border:1px solid var(--line)}
+.badge.delivered{color:var(--ok);border-color:var(--ok)}.badge.cancelled{color:var(--muted);text-decoration:line-through}
+.steps{display:flex;gap:4px;margin:8px 0}
+.steps i{flex:1;height:5px;border-radius:3px;background:var(--line)}.steps i.on{background:var(--brand)}
+.tbl{overflow-x:auto}
+table{border-collapse:collapse;width:100%;font-size:.92rem}
+th,td{text-align:left;padding:8px;border-bottom:1px solid var(--line);vertical-align:top}
+#toast{position:fixed;bottom:16px;left:50%;transform:translateX(-50%);background:var(--ink);color:var(--bg);padding:10px 18px;border-radius:8px;opacity:0;pointer-events:none;transition:opacity .2s}
+#toast.show{opacity:1}
+@media(max-width:560px){.bar,.two{grid-template-columns:1fr}}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <span class="brand">Shop</span>
+    <nav id="nav" aria-label="Main"></nav>
+  </header>
+  <main id="view"></main>
+</div>
+<div id="toast" role="status"></div>
+
+<script>
+const CURRENCY = 'USD';                       // change to 'INR', 'EUR', etc.
+const $ = s => document.querySelector(s);
+const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const money = c => (c / 100).toLocaleString(undefined, { style: 'currency', currency: CURRENCY });
+const STEPS = ['pending', 'processing', 'shipped', 'delivered'];
+
+let token = localStorage.getItem('token'), user = null, products = [], view = 'shop', filters = { search: '', category: '' };
+let cart = JSON.parse(localStorage.getItem('cart') || '{}');   // { productId: qty }
+const saveCart = () => { localStorage.setItem('cart', JSON.stringify(cart)); renderNav(); };
+const cartCount = () => Object.values(cart).reduce((a, b) => a + b, 0);
+
+function toast(t) { const el = $('#toast'); el.textContent = t; el.classList.add('show'); setTimeout(() => el.classList.remove('show'), 2200); }
+
+async function api(path, method = 'GET', body) {
+  const r = await fetch('/api' + path, { method, headers: { 'Content-Type': 'application/json', ...(token && { Authorization: 'Bearer ' + token }) }, body: body && JSON.stringify(body) });
+  const data = await r.json().catch(() => ({}));
+  if (r.status === 401 && token) { logout(false); }
+  if (!r.ok) throw new Error(data.error || 'Something went wrong.');
+  return data;
+}
+
+// ---------- navigation ----------
+function go(v) { view = v; renderNav(); render(); }
+function renderNav() {
+  const items = [['shop', 'Shop'], ['cart', `Cart (${cartCount()})`]];
+  if (user) items.push(['orders', 'My orders']);
+  if (user?.role === 'admin') items.push(['admin', 'Admin']);
+  items.push(user ? ['logout', `Log out (${esc(user.name)})`] : ['login', 'Log in']);
+  $('#nav').innerHTML = items.map(([k, l]) => `<button class="btn ghost sm" data-go="${k}" ${k === view ? 'aria-current="page"' : ''}>${l}</button>`).join('');
+}
+$('#nav').onclick = e => { const k = e.target.dataset.go; if (!k) return; k === 'logout' ? logout(true) : go(k); };
+
+function logout(manual) { token = null; user = null; localStorage.removeItem('token'); go('shop'); if (manual) toast('Logged out'); }
+
+async function render() {
+  const v = $('#view');
+  try {
+    if (view === 'shop') return renderShop(v);
+    if (view === 'cart') return renderCart(v);
+    if (view === 'login') return renderLogin(v);
+    if (!user) return go('login');
+    if (view === 'orders') return await renderOrders(v);
+    if (view === 'admin') return user.role === 'admin' ? await renderAdmin(v) : go('shop');
+  } catch (e) { v.innerHTML = `<p class="msg">${esc(e.message)}</p>`; }
+}
+
+// ---------- shop ----------
+async function loadProducts() { products = await api('/products'); }
+function productCard(p) {
+  return `<article class="card"><div class="img">${p.imageUrl ? `<img src="${esc(p.imageUrl)}" alt="${esc(p.title)}" loading="lazy">` : esc(p.title[0] || '?')}</div>
+    <div class="body"><h3>${esc(p.title)}</h3><span class="muted">${esc(p.category)}</span><p class="muted" style="margin:0;flex:1">${esc(p.description)}</p>
+    <div class="line" style="border:0;padding:0"><span class="price">${money(p.price)}</span>
+    <button class="btn sm" data-add="${p._id}" ${p.stock < 1 ? 'disabled' : ''}>${p.stock < 1 ? 'Sold out' : 'Add to cart'}</button></div></div></article>`;
+}
+async function renderShop(v) {
+  if (!products.length) await loadProducts();
+  const cats = [...new Set(products.map(p => p.category))].sort();
+  v.innerHTML = `<h2>Products</h2><div class="bar"><input id="q" type="search" placeholder="Search products" aria-label="Search" value="${esc(filters.search)}">
+    <select id="cat" aria-label="Category"><option value="">All categories</option>${cats.map(c => `<option ${c === filters.category ? 'selected' : ''}>${esc(c)}</option>`).join('')}</select></div><div class="grid" id="grid"></div>`;
+  const draw = () => {
+    const list = products.filter(p => p.title.toLowerCase().includes(filters.search.toLowerCase()) && (!filters.category || p.category === filters.category));
+    $('#grid').innerHTML = list.length ? list.map(productCard).join('') : '<p class="muted">No products match your search.</p>';
+  };
+  draw();
+  $('#q').oninput = e => { filters.search = e.target.value; draw(); };
+  $('#cat').onchange = e => { filters.category = e.target.value; draw(); };
+}
+$('#view').addEventListener('click', e => {
+  const id = e.target.dataset.add; if (!id) return;
+  const p = products.find(x => x._id === id);
+  if ((cart[id] || 0) >= p.stock) return toast('No more stock available');
+  cart[id] = (cart[id] || 0) + 1; saveCart(); toast(`Added ${p.title}`);
+});
+
+// ---------- cart & checkout ----------
+function renderCart(v) {
+  const lines = Object.entries(cart).map(([id, q]) => ({ p: products.find(x => x._id === id), q })).filter(l => l.p);
+  if (!lines.length) { v.innerHTML = '<h2>Your cart</h2><p class="muted">Your cart is empty. Browse the shop to add items.</p>'; return; }
+  const total = lines.reduce((s, l) => s + l.p.price * l.q, 0);
+  v.innerHTML = `<h2>Your cart</h2><div class="panel">${lines.map(({ p, q }) => `<div class="line"><div><strong>${esc(p.title)}</strong><div class="muted">${money(p.price)} each</div></div>
+    <div class="qty"><button class="btn ghost sm" data-q="${p._id}" data-d="-1" aria-label="Decrease">−</button><span>${q}</span><button class="btn ghost sm" data-q="${p._id}" data-d="1" aria-label="Increase">+</button></div>
+    <strong>${money(p.price * q)}</strong></div>`).join('')}
+    <div class="line" style="border:0"><strong>Total</strong><strong>${money(total)}</strong></div></div>
+    <div class="panel"><h3 style="margin-top:0">Delivery details</h3><form class="stack" id="checkout">
+    <label>Full name <input name="name" required value="${esc(user?.name || '')}"></label>
+    <label>Address <textarea name="address" rows="2" required></textarea></label>
+    <label>Phone <input name="phone" type="tel" required></label>
+    <div class="msg" id="co-msg" role="alert"></div>
+    <button class="btn">${user ? 'Place order' : 'Log in to place order'}</button></form>
+    <p class="muted" style="margin-bottom:0">Payment is not connected in this demo; orders are placed as pay-on-delivery.</p></div>`;
+  $('#checkout').onsubmit = async e => {
+    e.preventDefault();
+    if (!user) return go('login');
+    try {
+      const items = Object.entries(cart).map(([productId, qty]) => ({ productId, qty }));
+      await api('/orders', 'POST', { items, shipping: Object.fromEntries(new FormData(e.target)) });
+      cart = {}; saveCart(); products = []; toast('Order placed'); go('orders');
+    } catch (err) { $('#co-msg').textContent = err.message; }
+  };
+}
+$('#view').addEventListener('click', e => {
+  const id = e.target.dataset.q; if (!id) return;
+  const p = products.find(x => x._id === id), n = (cart[id] || 0) + Number(e.target.dataset.d);
+  if (n > p.stock) return toast('No more stock available');
+  n <= 0 ? delete cart[id] : cart[id] = n; saveCart(); renderCart($('#view'));
+});
+
+// ---------- login / register ----------
+function renderLogin(v) {
+  let mode = 'login';
+  v.innerHTML = `<div class="panel" style="max-width:380px;margin:24px auto"><h2 style="margin-top:0" id="lt">Log in</h2><form class="stack" id="af">
+    <label class="hidden" id="nw">Name <input name="name"></label>
+    <label>Email <input name="email" type="email" required autocomplete="email"></label>
+    <label>Password <input name="password" type="password" required minlength="8" autocomplete="current-password"></label>
+    <div class="msg" id="am" role="alert"></div><button class="btn" id="ab">Log in</button></form>
+    <p class="muted"><a href="#" id="sw">Create an account instead</a></p></div>`;
+  $('#sw').onclick = e => {
+    e.preventDefault(); mode = mode === 'login' ? 'register' : 'login';
+    $('#nw').classList.toggle('hidden', mode === 'login'); $('#lt').textContent = $('#ab').textContent = mode === 'login' ? 'Log in' : 'Create account';
+    $('#sw').textContent = mode === 'login' ? 'Create an account instead' : 'I already have an account';
+  };
+  $('#af').onsubmit = async e => {
+    e.preventDefault();
+    try {
+      const d = await api('/auth/' + mode, 'POST', Object.fromEntries(new FormData(e.target)));
+      token = d.token; user = d.user; localStorage.setItem('token', token); go(Object.keys(cart).length ? 'cart' : 'shop');
+    } catch (err) { $('#am').textContent = err.message; }
+  };
+}
+
+// ---------- orders ----------
+function orderCard(o, admin) {
+  const idx = STEPS.indexOf(o.status);
+  return `<div class="panel"><div class="line" style="border:0;padding:0"><div><strong>Order #${o._id.slice(-6)}</strong>
+    <div class="muted">${new Date(o.createdAt).toLocaleString()}${admin && o.user ? ` · ${esc(o.user.name)} (${esc(o.user.email)})` : ''}</div></div>
+    <span class="badge ${o.status}">${o.status}</span></div>
+    ${o.status === 'cancelled' ? '' : `<div class="steps" aria-hidden="true">${STEPS.map((_, i) => `<i class="${i <= idx ? 'on' : ''}"></i>`).join('')}</div>`}
+    ${o.items.map(i => `<div class="muted">${i.qty} × ${esc(i.title)} — ${money(i.price * i.qty)}</div>`).join('')}
+    <div class="muted">Ship to: ${esc(o.shipping.name)}, ${esc(o.shipping.address)}, ${esc(o.shipping.phone)}</div>
+    <div class="line" style="border:0;padding-bottom:0"><strong>Total ${money(o.total)}</strong>
+    ${admin ? `<select data-status="${o._id}" aria-label="Order status" style="width:auto">${[...STEPS, 'cancelled'].map(s => `<option ${s === o.status ? 'selected' : ''}>${s}</option>`).join('')}</select>`
+      : o.status === 'pending' ? `<button class="btn ghost sm" data-cancel="${o._id}">Cancel order</button>` : ''}</div></div>`;
+}
+async function renderOrders(v) {
+  const orders = await api('/orders');
+  v.innerHTML = '<h2>My orders</h2>' + (orders.length ? orders.map(o => orderCard(o, false)).join('') : '<p class="muted">You have not placed any orders yet.</p>');
+}
+$('#view').addEventListener('click', async e => {
+  const id = e.target.dataset.cancel; if (!id || !confirm('Cancel this order?')) return;
+  try { await api(`/orders/${id}/cancel`, 'PUT'); products = []; toast('Order cancelled'); render(); } catch (err) { toast(err.message); }
+});
+
+// ---------- admin ----------
+let editing = null, adminTab = 'products';
+async function renderAdmin(v) {
+  v.innerHTML = `<h2>Admin</h2><div class="nav" style="display:flex;gap:6px;margin-bottom:14px">
+    <button class="btn ghost sm" data-tab="products" ${adminTab === 'products' ? 'aria-current="page"' : ''}>Products</button>
+    <button class="btn ghost sm" data-tab="orders" ${adminTab === 'orders' ? 'aria-current="page"' : ''}>All orders</button></div><div id="adm"></div>`;
+  if (adminTab === 'orders') {
+    const orders = await api('/orders?all=1');
+    $('#adm').innerHTML = orders.length ? orders.map(o => orderCard(o, true)).join('') : '<p class="muted">No orders yet.</p>';
+    return;
+  }
+  await loadProducts();
+  const p = products.find(x => x._id === editing) || {};
+  $('#adm').innerHTML = `<div class="panel"><h3 style="margin-top:0">${editing ? 'Edit product' : 'Add product'}</h3><form class="stack" id="pf">
+    <label>Title <input name="title" required value="${esc(p.title)}"></label>
+    <label>Description <textarea name="description" rows="2">${esc(p.description)}</textarea></label>
+    <div class="two"><label>Category <input name="category" value="${esc(p.category)}"></label><label>Image URL <input name="imageUrl" type="url" value="${esc(p.imageUrl)}"></label></div>
+    <div class="two"><label>Price <input name="price" type="number" min="0" step="0.01" required value="${p.price != null ? p.price / 100 : ''}"></label>
+    <label>Stock <input name="stock" type="number" min="0" step="1" required value="${p.stock ?? ''}"></label></div>
+    <div class="msg" id="pm" role="alert"></div>
+    <div><button class="btn">Save product</button> ${editing ? '<button type="button" class="btn ghost" id="pc">Cancel</button>' : ''}</div></form></div>
+    <div class="panel tbl"><table><thead><tr><th>Product</th><th>Price</th><th>Stock</th><th></th></tr></thead><tbody>
+    ${products.map(x => `<tr><td>${esc(x.title)}<div class="muted">${esc(x.category)}</div></td><td>${money(x.price)}</td><td>${x.stock}</td>
+    <td><button class="btn ghost sm" data-edit="${x._id}">Edit</button> <button class="btn ghost sm" data-del="${x._id}">Delete</button></td></tr>`).join('')}</tbody></table></div>`;
+  $('#pf').onsubmit = async e => {
+    e.preventDefault();
+    try {
+      const b = Object.fromEntries(new FormData(e.target));
+      await (editing ? api('/products/' + editing, 'PUT', b) : api('/products', 'POST', b));
+      editing = null; toast('Product saved'); renderAdmin($('#view'));
+    } catch (err) { $('#pm').textContent = err.message; }
+  };
+  if ($('#pc')) $('#pc').onclick = () => { editing = null; renderAdmin($('#view')); };
+}
+$('#view').addEventListener('click', async e => {
+  const d = e.target.dataset;
+  if (d.tab) { adminTab = d.tab; renderAdmin($('#view')); }
+  if (d.edit) { editing = d.edit; renderAdmin($('#view')); window.scrollTo(0, 0); }
+  if (d.del && confirm('Delete this product?')) { await api('/products/' + d.del, 'DELETE'); toast('Product deleted'); renderAdmin($('#view')); }
+});
+$('#view').addEventListener('change', async e => {
+  const id = e.target.dataset.status; if (!id) return;
+  try { await api(`/orders/${id}/status`, 'PUT', { status: e.target.value }); toast('Status updated'); products = []; renderAdmin($('#view')); }
+  catch (err) { toast(err.message); renderAdmin($('#view')); }
+});
+
+// ---------- boot ----------
+(async () => {
+  try { await loadProducts(); } catch {}
+  if (token) { try { user = await api('/auth/me'); } catch {} }
+  renderNav(); render();
+})();
+</script>
+</body>
+</html>
